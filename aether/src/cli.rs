@@ -25,8 +25,6 @@ Connection:
                            (off by default, e.g. 127.0.0.1:1820)
   --upstream <url>         dial out through a proxy already running here, e.g.
                            socks5://127.0.0.1:1080 or http://user:pass@host:8080;
-                           tor and psiphon dial through it as well when no tunnel
-                           carries them (tor takes a socks5 address only)
   --mark <n>               put this firewall mark (SO_MARK) on every socket aether
                            opens to the internet, e.g. 0xff, so a tun front end on
                            the same Linux router can let them past instead of
@@ -220,94 +218,6 @@ WireGuard:
   --keepalive <n>          persistent keepalive interval in seconds (default 5)
   --no-profile-retry       don't retry other obfuscation profiles during scan
 
-Tor:
-  Three ways to use tor, all needing a build made with the tor feature:
-  cargo build --release --features tor
-
-  --tor                    carry tor inside the tunnel: aether -> warp -> tor ->
-                           internet. The usual proxy keeps the warp exit and a
-                           second one, on --tor-bind, comes out of tor. Any
-                           transport carries it, with nothing in between, so
-                           --wg --tor has the wireguard tunnel carry tor itself
-  --tor-reverse            the other way round: dial the tunnel through tor, so
-                           warp is reached from a tor exit and your network never
-                           sees warp. Tor carries tcp only and the wireguard
-                           endpoints of warp answer on udp alone, so this runs
-                           masque over http/2, gool's outer hop too, and
-                           refuses --wg and --gool-classic
-  --tor-only               no tunnel at all: the proxy on --bind is plain tor
-  --tor-bind <addr>        where the tor proxy listens with --tor and
-                           --tor-reverse (default 127.0.0.1:1820)
-  --tor-http <addr>        also serve tor as an http/connect proxy here, for
-                           clients that cannot speak socks5 (off by default)
-  --tor-bridge-file <path> read bridge lines from this file, one per line, the
-                           same shape torrc uses; blank lines and # are skipped
-  --tor-relays <what>      running tor relays from onionoo, used as plain
-                           bridges: auto (default, alongside bridgedb), only,
-                           off, or a count such as 80. bridgedb hands out a
-                           handful of bridges that are enumerated and blocked
-                           early; onionoo lists every running relay, which is a
-                           far larger pool to measure against
-  --tor-relay-ports <set>  which relay ports to consider: web (default, only
-                           80 and 443, the ports a restrictive firewall tends
-                           to leave open) or any. the ports tor itself is known
-                           for are always skipped
-  --tor-dir <path>         where tor keeps its directory cache and state
-                           (default <config>-tor beside the identity file)
-
-  --psiphon                carry psiphon inside the tunnel: aether -> warp ->
-                           psiphon -> internet, served on --psiphon-bind
-  --psiphon-reverse        the other way round: dial the tunnel through psiphon.
-                           psiphon carries tcp only, so this runs masque over
-                           http/2, gool's outer hop too, and refuses --wg and
-                           --gool-classic
-  --psiphon-only           no tunnel at all: the proxy on --bind is plain psiphon
-  --psiphon-mode <shape>   auto (default, let psiphon pick), cdn (only fronted
-                           meek through a cdn, for networks that block the rest)
-                           or direct (no fronting)
-  --psiphon-config <path>  a psiphon json config of your own, laid over the
-                           built-in one. only needed to use different
-                           credentials or server list settings
-  --psiphon-cdn-ips <list> addresses to try as cdn fronting edges, comma or
-                           space separated. left empty, the list built into
-                           psiphon is used
-  --psiphon-cdn-sni <list> server names to present to those edges
-  --psiphon-cdn-sets <list>
-                           which of the edge lists built into psiphon the
-                           fronting scan tries: cloudflare, fastly, cloudfront,
-                           psiphon-akamai, psiphon-bunny, vercel, github,
-                           curated-fronting, legacy-android-overrides. left
-                           empty, all of them; named beside --psiphon-cdn-ips,
-                           they are tried after those addresses
-  --psiphon-bind <addr>    where the psiphon proxy listens with --psiphon and
-                           --psiphon-reverse (default 127.0.0.1:1821)
-  --psiphon-http <addr>    also serve psiphon as an http/connect proxy here
-  --psiphon-region <cc>    ask psiphon to leave from this country, e.g. DE. the
-                           log lists what is on offer as AvailableEgressRegions
-  --psiphon-dir <path>     where psiphon keeps its data (default
-                           <config>-psiphon beside the identity file)
-  --psiphon-bin <path>     the psiphon-tunnel-core binary to run, when it is not
-                           next to aether, in ./pt, or on PATH
-  --psiphon-server-entries <path>
-                           a file of server entries psiphon starts with, in the
-                           form the remote list unpacks to, so that the first
-                           connection does not depend on downloading that list;
-                           a fetched list is merged on top of it
-
-  On a network that blocks tor, aether fetches its own bridges from bridgedb and
-  finds the pluggable transports already on this machine, tor browser's included.
-  Nothing below is needed for that; it is there to override what it picks.
-
-  --tor-bridges            go to bridges at once, without trying tor plainly first
-  --no-tor-bridges         never use bridges, however blocked the network looks
-  --tor-bridge <line>      a bridge line of your own, instead of the fetched ones.
-                           Repeat it for more than one, e.g.
-                           --tor-bridge \"obfs4 1.2.3.4:443 FINGERPRINT cert=... iat-mode=0\"
-  --tor-pt [name=]<path>   the pluggable transport binary a bridge needs, e.g.
-                           --tor-pt /usr/bin/lyrebird (obfs4 is assumed) or
-                           --tor-pt snowflake=/usr/bin/snowflake-client
-  --tor-pt-dir <path>      another folder to look in for those binaries
-
 Zero Trust (WARP for organizations):
   --team <name>            enrol into a Zero Trust organization by team name
   --access-id <id>         service token client id (headless enrolment)
@@ -349,11 +259,7 @@ Config files:
                            five. Each new identity is saved only once WARP is
                            enabled on it. An identity file already
                            there is kept, never replaced; point the config paths
-                           at new files to get new keys. With --tor-reverse or
-                           --psiphon-reverse the registrations go through that
-                           carrier whatever the protocol: they are https, which
-                           tor and psiphon carry, so --wg and --gool-classic are
-                           refused there only for the tunnel
+                           at new files to get new keys.
   --api-address <ip|name[:port]>
                            where the calls to the WARP API, which register and
                            enroll the keys, go: port 443 unless one follows the
@@ -396,40 +302,6 @@ Environment variables:
   AETHER_STATS                     --stats
   AETHER_STATS_SECS                --stats-secs
   AETHER_EXIT_LOC                  --exit-loc
-  AETHER_EXIT_LOC_SECS             --exit-loc-secs
-  AETHER_TOR                       chain for --tor, reverse, or only
-  AETHER_TOR_BRIDGES               --tor-bridge, several separated by ;
-                                   auto for --tor-bridges, off for --no-tor-bridges
-  AETHER_TOR_PT                    --tor-pt, several separated by ;
-  AETHER_TOR_PT_DIR                --tor-pt-dir, several separated by ;
-  AETHER_TOR_BIND                  --tor-bind
-  AETHER_TOR_HTTP                  --tor-http
-  AETHER_TOR_BRIDGE_FILE           --tor-bridge-file
-  AETHER_TOR_RELAYS                --tor-relays
-  AETHER_TOR_RELAY_PORTS           --tor-relay-ports
-  AETHER_PSIPHON                   --psiphon (chain), --psiphon-reverse,
-                                   --psiphon-only
-  AETHER_PSIPHON_CONFIG            --psiphon-config
-  AETHER_PSIPHON_MODE              --psiphon-mode
-  AETHER_PSIPHON_CDN_IPS           --psiphon-cdn-ips
-  AETHER_PSIPHON_CDN_SNI           --psiphon-cdn-sni
-  AETHER_PSIPHON_CDN_SETS          --psiphon-cdn-sets
-  AETHER_PSIPHON_BIND              --psiphon-bind
-  AETHER_PSIPHON_HTTP              --psiphon-http
-  AETHER_PSIPHON_REGION            --psiphon-region
-  AETHER_PSIPHON_DIR               --psiphon-dir
-  AETHER_PSIPHON_BIN               --psiphon-bin
-  AETHER_PSIPHON_SERVER_ENTRIES    --psiphon-server-entries
-  AETHER_PSIPHON_READY_SECS        how long to wait for psiphon to tunnel (180)
-  AETHER_TOR_DIR                   --tor-dir
-  AETHER_TOR_DIRECT_SECS           how long to try tor plainly before bridges (75)
-  AETHER_TOR_STALL_SECS            give up on a bridge after this long with no
-                                   headway, however far it got (75)
-  AETHER_TOR_BRIDGE_SECS           the longest any one bridge may take (360)
-  AETHER_TOR_COUNTRY               ask bridgedb for this country, e.g. ir
-  AETHER_TOR_CHECK                 host:port tor must reach before it counts as
-                                   working (check.torproject.org:443)
-  AETHER_TOR_LOG                   how loud tor is: info, debug or trace
   AETHER_QUICK_RECONNECT           1 or 0, for --quick-reconnect
   AETHER_IP                        --ip: v4, v6 or both
   AETHER_PEER                      --peer
@@ -581,34 +453,6 @@ pub fn parse_args(args: Vec<String>) -> crate::error::Result<Parsed> {
             "--bind" => set("AETHER_SOCKS", next_value!()),
             "--http-proxy" => set("AETHER_HTTP_PROXY", next_value!()),
             "--upstream" => set("AETHER_UPSTREAM", next_value!()),
-            "--tor" => set("AETHER_TOR", "chain"),
-            "--tor-reverse" => set("AETHER_TOR", "reverse"),
-            "--tor-only" => set("AETHER_TOR", "only"),
-            "--tor-bridge" => append("AETHER_TOR_BRIDGES", next_value!()),
-            "--tor-bridges" => set("AETHER_TOR_BRIDGES", "auto"),
-            "--tor-bridge-file" => set("AETHER_TOR_BRIDGE_FILE", next_value!()),
-            "--tor-relays" => set("AETHER_TOR_RELAYS", next_value!()),
-            "--tor-relay-ports" => set("AETHER_TOR_RELAY_PORTS", next_value!()),
-            "--no-tor-bridges" => set("AETHER_TOR_BRIDGES", "off"),
-            "--tor-pt" => append("AETHER_TOR_PT", next_value!()),
-            "--tor-pt-dir" => append("AETHER_TOR_PT_DIR", next_value!()),
-            "--tor-bind" => set("AETHER_TOR_BIND", next_value!()),
-            "--tor-http" => set("AETHER_TOR_HTTP", next_value!()),
-            "--tor-dir" => set("AETHER_TOR_DIR", next_value!()),
-            "--psiphon" => set("AETHER_PSIPHON", "chain"),
-            "--psiphon-reverse" => set("AETHER_PSIPHON", "reverse"),
-            "--psiphon-only" => set("AETHER_PSIPHON", "only"),
-            "--psiphon-config" => set("AETHER_PSIPHON_CONFIG", next_value!()),
-            "--psiphon-bind" => set("AETHER_PSIPHON_BIND", next_value!()),
-            "--psiphon-http" => set("AETHER_PSIPHON_HTTP", next_value!()),
-            "--psiphon-region" => set("AETHER_PSIPHON_REGION", next_value!()),
-            "--psiphon-mode" => set("AETHER_PSIPHON_MODE", next_value!()),
-            "--psiphon-cdn-ips" => set("AETHER_PSIPHON_CDN_IPS", next_value!()),
-            "--psiphon-cdn-sni" => set("AETHER_PSIPHON_CDN_SNI", next_value!()),
-            "--psiphon-cdn-sets" => set("AETHER_PSIPHON_CDN_SETS", next_value!()),
-            "--psiphon-dir" => set("AETHER_PSIPHON_DIR", next_value!()),
-            "--psiphon-bin" => set("AETHER_PSIPHON_BIN", next_value!()),
-            "--psiphon-server-entries" => set("AETHER_PSIPHON_SERVER_ENTRIES", next_value!()),
             "--mark" => set("AETHER_MARK", next_value!()),
             "--exit-loc" => set("AETHER_EXIT_LOC", next_value!()),
             "--exit-loc-secs" => set("AETHER_EXIT_LOC_SECS", next_value!()),

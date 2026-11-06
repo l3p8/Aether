@@ -2,7 +2,6 @@
 pub mod account;
 pub mod aethernoize;
 pub mod api;
-pub mod bridges;
 pub mod cli;
 pub mod config;
 pub mod consts;
@@ -19,7 +18,6 @@ pub mod masque_h2;
 pub mod netstack;
 pub mod noize;
 pub mod prober;
-pub mod psiphon;
 pub mod quic;
 pub mod routing;
 pub mod sniff;
@@ -27,7 +25,6 @@ pub mod socks;
 pub mod stats;
 pub mod sysprofile;
 pub mod tls;
-pub mod tor;
 pub mod tunnelping;
 pub mod upstream;
 pub mod wg_prober;
@@ -127,25 +124,6 @@ pub async fn run_with(args: Vec<String>) -> Result<()> {
     let (core_end, core_ended) = tokio::sync::mpsc::unbounded_channel::<AetherError>();
     let listeners = Listeners::bind(listen, core_end.clone()).await?;
 
-    // Tor or Psiphon alone serves the socks5 listener the core holds, from its start on.
-    if tor::mode() == tor::Mode::Only {
-        let state = tor::state_dir(&base_config);
-        return tor::run_only(listeners.into_socks(), listen, state).await;
-    }
-
-    if psiphon::mode() == psiphon::Mode::Only {
-        let state = psiphon::state_dir(&base_config);
-        return psiphon::run_only(listeners.into_socks(), listen, state).await;
-    }
-
-    if tor::mode() == tor::Mode::Reverse && psiphon::mode() == psiphon::Mode::Reverse {
-        return Err(AetherError::Other(
-            "--tor-reverse and --psiphon-reverse both want to carry the tunnel; pick one, or put \
-             the other inside it with --tor or --psiphon"
-                .into(),
-        ));
-    }
-
     let pinned_wiw = wiw_endpoints_from_env()?;
     let pinned_mim = mim_endpoints_from_env()?;
 
@@ -161,16 +139,6 @@ pub async fn run_with(args: Vec<String>) -> Result<()> {
         Err(_) => select_protocol(&base_config).await,
     };
 
-    if tor::mode() == tor::Mode::Only {
-        let state = tor::state_dir(&base_config);
-        return tor::run_only(listeners.into_socks(), listen, state).await;
-    }
-
-    if psiphon::mode() == psiphon::Mode::Only {
-        let state = psiphon::state_dir(&base_config);
-        return psiphon::run_only(listeners.into_socks(), listen, state).await;
-    }
-
     if protocol != Protocol::WarpInWarp && !pinned_wiw.is_empty() {
         log::warn!(
             "[-] the warp-in-warp endpoints you set are ignored on {}; they only apply to --gool",
@@ -185,65 +153,6 @@ pub async fn run_with(args: Vec<String>) -> Result<()> {
         );
     }
 
-    // Tor or Psiphon inside the tunnel serves the listener the user dials. Its end leaves nothing
-    // behind that port, so the core ends with it, saying why, rather than run on without it. And
-    // as the core ends, Tor and Psiphon end with it, inside the tunnel or carrying it, letting go
-    // of their listeners, also where the process goes on after it, as through the C API.
-    let mut tor_and_psiphon = TaskGuard::new();
-    // Inside the tunnel, Tor or Psiphon dials the core's own listener: where it is bound, a port 0
-    // asked for being the port the system picked.
-    let held = crate::socks::dialable(listeners.socks.local_addr().unwrap_or(listen));
-    match tor::mode() {
-        tor::Mode::Chain => {
-            let through = held;
-            let state = tor::state_dir(&base_config);
-            let chain = tokio::spawn(tor::run_chain(through, state));
-            watch_chain("tor", chain, core_end.clone(), &mut tor_and_psiphon);
-        }
-        tor::Mode::Reverse => {
-            if needs_udp_to_warp(protocol, gool_classic()) {
-                return Err(AetherError::Other(format!(
-                    "tor carries tcp only and warp's wireguard endpoints answer on udp alone, so \
-                     {} can never be reached through tor; use --masque or --gool, which this mode \
-                     runs over http/2, or put tor inside the tunnel instead with --tor",
-                    protocol.label()
-                )));
-            }
-
-            let (socks, carrier) = tor::start_reverse(tor::state_dir(&base_config)).await?;
-            tor_and_psiphon.push(carrier);
-            std::env::set_var("AETHER_UPSTREAM", carrier_upstream("tor", socks)?);
-            std::env::set_var("AETHER_MASQUE_HTTP2", "1");
-            log::info!("[+] the tunnel is dialled through tor on the http/2 carrier");
-        }
-        tor::Mode::Only | tor::Mode::Off => {}
-    }
-
-    match psiphon::mode() {
-        psiphon::Mode::Chain => {
-            let through = held;
-            let state = psiphon::state_dir(&base_config);
-            let chain = tokio::spawn(psiphon::run_chain(through, state));
-            watch_chain("psiphon", chain, core_end.clone(), &mut tor_and_psiphon);
-        }
-        psiphon::Mode::Reverse => {
-            if needs_udp_to_warp(protocol, gool_classic()) {
-                return Err(AetherError::Other(format!(
-                    "psiphon carries tcp only and warp's wireguard endpoints answer on udp alone, \
-                     so {} can never be reached through psiphon; use --masque or --gool, which this \
-                     mode runs over http/2, or put psiphon inside the tunnel instead with --psiphon",
-                    protocol.label()
-                )));
-            }
-
-            let (socks, carrier) = psiphon::start_reverse(psiphon::state_dir(&base_config)).await?;
-            tor_and_psiphon.push(carrier);
-            std::env::set_var("AETHER_UPSTREAM", carrier_upstream("psiphon", socks)?);
-            std::env::set_var("AETHER_MASQUE_HTTP2", "1");
-            log::info!("[+] the tunnel is dialled through psiphon on the http/2 carrier");
-        }
-        psiphon::Mode::Only | psiphon::Mode::Off => {}
-    }
     drop(core_end);
 
     let session = async {
@@ -323,34 +232,6 @@ pub async fn run_with(args: Vec<String>) -> Result<()> {
         }
     };
     until_core_end(session, core_ended).await
-}
-
-/// Watches `chain`, the task of Tor or Psiphon (`name`) inside the tunnel, and reports its end on
-/// `core_end` however it ends: with its error, which is logged as "[-] tor: ..." or "[-] psiphon:
-/// ..." under the target "aether", as the apps that run the core read it; or by a panic, which
-/// tokio would otherwise keep to itself while the core ran on without that listener. `guard` ends
-/// this watch and then the chain as the core ends, and a chain ended so is not reported as one
-/// that ended by itself.
-fn watch_chain(
-    name: &'static str,
-    chain: tokio::task::JoinHandle<Result<()>>,
-    core_end: tokio::sync::mpsc::UnboundedSender<AetherError>,
-    guard: &mut TaskGuard,
-) {
-    let chain_task = chain.abort_handle();
-    let watch = tokio::spawn(async move {
-        let e = match chain.await {
-            Ok(Err(e)) => e,
-            Ok(Ok(())) => AetherError::Other(format!("{name} inside the tunnel stopped")),
-            // Ended with the core: nothing to report.
-            Err(failed) if failed.is_cancelled() => return,
-            Err(failed) => AetherError::Other(format!("{name} inside the tunnel failed: {failed}")),
-        };
-        log::error!(target: "aether", "[-] {name}: {e}");
-        let _ = core_end.send(e);
-    });
-    guard.push(watch.abort_handle());
-    guard.push(chain_task);
 }
 
 /// Runs `session` until it ends, or until something the core cannot go on without reports its end
@@ -1146,37 +1027,8 @@ fn register_request() -> Result<Option<RegisterSet>> {
 
 /// `--register`: makes sure the identities `wanted` names exist, registering the missing ones,
 /// and returns without scanning or opening a tunnel. An identity file already there is kept,
-/// never replaced. With a carrier around the tunnel the registrations go through it, whatever
-/// the protocol: they are https requests, which tor and psiphon carry, so the refusal of
-/// wireguard behind them concerns the tunnel alone. A carrier inside the tunnel, or on its own,
-/// plays no part in a registration.
+/// never replaced.
 async fn register_identities(wanted: RegisterSet, base_config: &str) -> Result<()> {
-    let carrier = match (tor::mode(), psiphon::mode()) {
-        (tor::Mode::Reverse, psiphon::Mode::Reverse) => {
-            return Err(AetherError::Other(
-                "--tor-reverse and --psiphon-reverse both want to carry the registration; \
-                 pick one"
-                    .into(),
-            ));
-        }
-        (tor::Mode::Reverse, _) => Some((
-            "tor",
-            tor::start_reverse(tor::state_dir(base_config)).await?,
-        )),
-        (_, psiphon::Mode::Reverse) => Some((
-            "psiphon",
-            psiphon::start_reverse(psiphon::state_dir(base_config)).await?,
-        )),
-        _ => None,
-    };
-    // The carrier ends as the registration does.
-    let mut carried = TaskGuard::new();
-    if let Some((name, (socks, carrier))) = carrier {
-        carried.push(carrier);
-        std::env::set_var("AETHER_UPSTREAM", carrier_upstream(name, socks)?);
-        log::info!("[+] the identities are registered through {name}");
-    }
-
     let wireguard = warp_config_path(base_config);
     let masque = masque_config_path(base_config);
     let identities = [
@@ -2768,21 +2620,6 @@ async fn run_wireguard_tunnel(
 
 type TunnelExit = tokio::task::JoinHandle<Result<()>>;
 
-/// The upstream setting that has the tunnel dialled through `name`, Tor or Psiphon around it, at
-/// `socks`. Checked as the setting is read: one set aside as unusable would have the tunnel, and
-/// a registration, dial out around the carrier, straight out, so it ends aether instead.
-fn carrier_upstream(name: &str, socks: SocketAddr) -> Result<String> {
-    let setting = format!("socks5://{socks}");
-    upstream::Upstream::parse(&setting).map_err(|e| {
-        AetherError::Other(format!(
-            "{name} listens on {socks}, which the tunnel cannot be dialled through ({}); \
-             aether ends rather than dial around {name}",
-            e.detail()
-        ))
-    })?;
-    Ok(setting)
-}
-
 fn http_proxy_listen() -> Option<SocketAddr> {
     let raw = std::env::var("AETHER_HTTP_PROXY").ok()?;
     let trimmed = raw.trim();
@@ -3004,14 +2841,6 @@ async fn run_warp_in_warp(
 /// Whether a tunnel of `protocol` needs UDP to reach WARP, which Tor and Psiphon around the tunnel
 /// do not carry: WireGuard does, and so does the classic gool, WireGuard in WireGuard. Gool over
 /// masque dials MASQUE alone, which runs over HTTP/2.
-fn needs_udp_to_warp(protocol: Protocol, classic_gool: bool) -> bool {
-    match protocol {
-        Protocol::WireGuard => true,
-        Protocol::WarpInWarp => classic_gool,
-        Protocol::Masque | Protocol::MasqueInMasque => false,
-    }
-}
-
 fn gool_classic() -> bool {
     matches!(
         std::env::var("AETHER_GOOL_MODE").as_deref(),
@@ -3293,30 +3122,6 @@ async fn select_protocol(base: &str) -> Protocol {
             key
         };
 
-        let (tor_alone, tor_chain) = if cfg!(feature = "tor") {
-            (
-                take("Tor alone, with no warp under it", &mut extra, &mut next),
-                take(
-                    "Tor and warp chained, either way round",
-                    &mut extra,
-                    &mut next,
-                ),
-            )
-        } else {
-            (String::new(), String::new())
-        };
-
-        let psiphon_alone = take(
-            "Psiphon alone, with no warp under it",
-            &mut extra,
-            &mut next,
-        );
-        let psiphon_chain = take(
-            "Psiphon and warp chained, either way round",
-            &mut extra,
-            &mut next,
-        );
-
         let last = next;
         let zero_trust_key = last.to_string();
         let zero_trust = match team_scope() {
@@ -3346,16 +3151,6 @@ async fn select_protocol(base: &str) -> Protocol {
                 enrol_zero_trust(base).await;
                 continue;
             }
-            _ if !tor_alone.is_empty() && choice == tor_alone => {
-                std::env::set_var("AETHER_TOR", "only");
-                return Protocol::Masque;
-            }
-            _ if !tor_chain.is_empty() && choice == tor_chain => return select_tor_chain().await,
-            _ if choice == psiphon_alone => {
-                std::env::set_var("AETHER_PSIPHON", "only");
-                return Protocol::Masque;
-            }
-            _ if choice == psiphon_chain => return select_psiphon_chain().await,
             _ => return Protocol::Masque,
         }
     }
@@ -3375,69 +3170,6 @@ async fn select_gool() -> Protocol {
         std::env::set_var("AETHER_GOOL_MODE", "classic");
     }
     Protocol::WarpInWarp
-}
-
-async fn select_psiphon_chain() -> Protocol {
-    let answer = prompt_line(
-        "\nWhich way round?\n  \
-         [1] psiphon inside warp: you, warp, psiphon, the internet. The exit is a psiphon \
-         exit, and a network that blocks psiphon never sees it (default)\n  \
-         [2] warp inside psiphon: you, psiphon, warp, the internet. The exit is a warp exit \
-         reached from a psiphon exit, and your network never sees warp\n\
-         Choose [1-2] (default 1): ",
-    )
-    .await;
-
-    if matches!(answer.as_deref(), Some("2")) {
-        std::env::set_var("AETHER_PSIPHON", "reverse");
-        log::info!("[*] the tunnel will be dialled through psiphon, on the http/2 carrier");
-        return Protocol::Masque;
-    }
-
-    std::env::set_var("AETHER_PSIPHON", "chain");
-    log::info!("[*] psiphon will be carried inside the tunnel");
-    select_chain_carrier("psiphon").await
-}
-
-async fn select_tor_chain() -> Protocol {
-    let answer = prompt_line(
-        "\nWhich way round?\n  \
-         [1] tor inside warp: you, warp, tor, the internet. The exit is a tor exit, and a \
-         network that blocks tor never sees it (default)\n  \
-         [2] warp inside tor: you, tor, warp, the internet. The exit is a warp exit reached \
-         from a tor exit, and your network never sees warp\n\
-         Choose [1-2] (default 1): ",
-    )
-    .await;
-
-    if matches!(answer.as_deref(), Some("2")) {
-        std::env::set_var("AETHER_TOR", "reverse");
-        log::info!("[*] the tunnel will be dialled through tor, on the http/2 carrier");
-        return Protocol::Masque;
-    }
-
-    std::env::set_var("AETHER_TOR", "chain");
-    log::info!("[*] tor will be carried inside the tunnel");
-    select_chain_carrier("tor").await
-}
-
-async fn select_chain_carrier(what: &str) -> Protocol {
-    let answer = prompt_line(&format!(
-        "\nWhat carries {what}?\n  \
-         [1] MASQUE, over quic/h3 or http/2, asked next (default)\n  \
-         [2] WireGuard, warp over udp\n  \
-         [3] WARP-in-WARP / gool\n  \
-         [4] MASQUE-in-MASQUE\n\
-         Choose [1-4] (default 1): "
-    ))
-    .await;
-
-    match answer.as_deref() {
-        Some("2") => Protocol::WireGuard,
-        Some("3") => select_gool().await,
-        Some("4") => Protocol::MasqueInMasque,
-        _ => Protocol::Masque,
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3513,35 +3245,8 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    #[test]
-    fn the_tunnel_is_dialled_through_a_carrier_it_can_be_dialled_through() {
-        let tor: SocketAddr = "127.0.0.1:9050".parse().unwrap();
-        assert_eq!(
-            carrier_upstream("tor", tor).unwrap(),
-            "socks5://127.0.0.1:9050"
-        );
-        let psiphon: SocketAddr = "[::1]:1080".parse().unwrap();
-        assert_eq!(
-            carrier_upstream("psiphon", psiphon).unwrap(),
-            "socks5://[::1]:1080"
-        );
-    }
-
-    #[test]
-    fn a_carrier_the_tunnel_cannot_be_dialled_through_ends_aether() {
-        // Port 0, which an upstream setting cannot name: set aside, it would have the tunnel go
-        // around the carrier.
-        let unbound: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let error = carrier_upstream("tor", unbound).unwrap_err().to_string();
-        assert!(
-            error.contains("aether ends rather than dial around tor")
-                && !error.contains("(other: "),
-            "{error}"
-        );
-    }
-
     #[tokio::test]
-    async fn a_session_ends_when_tor_or_psiphon_inside_the_tunnel_ends() {
+    async fn a_session_ends_when_the_tunnel_ends() {
         // Nothing reports an end: the session alone decides, also when no sender is left.
         let (end, ended) = tokio::sync::mpsc::unbounded_channel::<AetherError>();
         drop(end);
@@ -3611,94 +3316,6 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
-    }
-
-    #[tokio::test]
-    async fn the_end_of_tor_or_psiphon_inside_is_reported_however_it_ends() {
-        capture_errors();
-        let next = |name: &'static str, chain: tokio::task::JoinHandle<Result<()>>| async move {
-            let (end, mut ended) = tokio::sync::mpsc::unbounded_channel::<AetherError>();
-            let mut chains = TaskGuard::new();
-            watch_chain(name, chain, end, &mut chains);
-            let reported = tokio::time::timeout(std::time::Duration::from_secs(2), ended.recv())
-                .await
-                .expect("the end is reported")
-                .expect("with its reason");
-            drop(chains);
-            reported
-        };
-
-        let failed = tokio::spawn(async {
-            Err(AetherError::Other(
-                "the tor socks5 listener cannot use 127.0.0.1:1".into(),
-            ))
-        });
-        let reported = next("tor", failed).await;
-        assert!(
-            matches!(&reported, AetherError::Other(why) if why.starts_with("the tor socks5 listener")),
-            "{reported:?}"
-        );
-        // The line the apps read: an error, under the target "aether", "[-] tor: " and the words.
-        let line = format!("[-] tor: {reported}");
-        assert!(
-            logged_errors()
-                .iter()
-                .any(|(target, message)| target == "aether" && *message == line),
-            "{line} is not among {:?}",
-            logged_errors()
-        );
-
-        // One that returns without an error has ended all the same.
-        let returned = tokio::spawn(async { Ok(()) });
-        let reported = next("psiphon", returned).await;
-        assert!(
-            matches!(&reported, AetherError::Other(why) if why == "psiphon inside the tunnel stopped"),
-            "{reported:?}"
-        );
-
-        // A panic, which tokio keeps in the task's handle.
-        let panicked = tokio::spawn(async {
-            if std::hint::black_box(true) {
-                panic!("a bug in the chain");
-            }
-            Ok(())
-        });
-        let reported = next("tor", panicked).await;
-        assert!(
-            matches!(&reported, AetherError::Other(why) if why.starts_with("tor inside the tunnel failed")),
-            "{reported:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_chain_ends_with_the_core_and_is_not_reported_as_ended_by_itself() {
-        capture_errors();
-        let (alive, gone) = tokio::sync::oneshot::channel::<()>();
-        let chain = tokio::spawn(async move {
-            let _alive = alive;
-            std::future::pending::<Result<()>>().await
-        });
-        let (end, mut ended) = tokio::sync::mpsc::unbounded_channel::<AetherError>();
-        let mut chains = TaskGuard::new();
-        watch_chain("ended-with-the-core", chain, end, &mut chains);
-
-        // The core ends.
-        drop(chains);
-        tokio::time::timeout(std::time::Duration::from_secs(2), gone)
-            .await
-            .expect("the chain is ended, letting go of what it held")
-            .expect_err("dropped, not finished");
-        let report = tokio::time::timeout(std::time::Duration::from_secs(2), ended.recv())
-            .await
-            .expect("the watch is ended as well");
-        assert!(report.is_none(), "{report:?}");
-        assert!(
-            !logged_errors()
-                .iter()
-                .any(|(_, message)| message.contains("ended-with-the-core")),
-            "{:?}",
-            logged_errors()
-        );
     }
 
     /// Whether the http proxy on `address` answers, here a request it cannot carry.
@@ -3800,16 +3417,6 @@ mod tests {
             .map(|(key, value)| (key.to_string(), value.to_string()))
             .collect();
         move |key: &str| values.get(key).cloned()
-    }
-
-    #[test]
-    fn tor_and_psiphon_around_the_tunnel_refuse_only_what_needs_udp() {
-        assert!(needs_udp_to_warp(Protocol::WireGuard, false));
-        assert!(needs_udp_to_warp(Protocol::WarpInWarp, true));
-        // Gool over masque reaches WARP by MASQUE alone; its WireGuard rides inside that tunnel.
-        assert!(!needs_udp_to_warp(Protocol::WarpInWarp, false));
-        assert!(!needs_udp_to_warp(Protocol::Masque, true));
-        assert!(!needs_udp_to_warp(Protocol::MasqueInMasque, false));
     }
 
     #[test]

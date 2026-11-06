@@ -2011,16 +2011,16 @@ mod relay_tests {
     async fn a_port_in_use_is_told_with_the_option_that_sets_it() {
         let taken = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = taken.local_addr().unwrap();
-        let error = bind_listener("psiphon socks5", address, "--psiphon-bind")
+        let error = bind_listener("socks5", address, "--bind")
             .await
             .expect_err("the port is taken")
             .to_string();
         assert!(
-            error.contains(&format!("the psiphon socks5 listener cannot use {address}")),
+            error.contains(&format!("the socks5 listener cannot use {address}")),
             "{error}"
         );
         assert!(
-            error.ends_with("choose another port with --psiphon-bind"),
+            error.ends_with("choose another port with --bind"),
             "{error}"
         );
     }

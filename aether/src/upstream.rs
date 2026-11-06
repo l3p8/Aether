@@ -72,10 +72,9 @@ pub async fn through<F: std::future::Future>(proxy: Upstream, future: F) -> F::O
 }
 
 /// The proxy AETHER_UPSTREAM names, as it names it now, or the one a task runs [`through`]. It is
-/// looked up on every call rather than once: --tor-reverse and --psiphon-reverse name their
-/// carrier only when it is up, and tor looks the setting up while it bootstraps, to fetch bridges,
-/// so an answer kept from then sent the registration and the tunnel past the carrier instead of
-/// through it. A setting is parsed, and announced, only when it changes.
+/// looked up on every call rather than once: a carrier names its proxy only when it is up, so an
+/// answer kept from then would send connections past the carrier instead of through it. A setting
+/// is parsed, and announced, only when it changes.
 pub fn configured() -> Option<Upstream> {
     if let Ok(proxy) = TASK_UPSTREAM.try_with(Upstream::clone) {
         return Some(proxy);
@@ -249,40 +248,6 @@ impl Upstream {
             Kind::Http => "http",
         };
         format!("{scheme}://{host}:{}", self.port)
-    }
-
-    /// The proxy as psiphon's UpstreamProxyURL takes it: socks5 or http, with any credentials
-    /// written into the address.
-    pub fn psiphon_url(&self) -> String {
-        let host = if self.host.contains(':') {
-            format!("[{}]", self.host)
-        } else {
-            self.host.clone()
-        };
-        let scheme = match self.kind {
-            Kind::Socks5 => "socks5",
-            Kind::Http => "http",
-        };
-        format!("{scheme}://{}{host}:{}", self.credentials(), self.port)
-    }
-
-    /// The proxy tor can dial its relays and bridges through, as tor's outbound proxy takes it: a
-    /// socks5 proxy at an address, with no name to resolve, and any credentials written into the
-    /// address. One with a password is taken on this machine only: tor prints a proxy elsewhere in
-    /// its log, password and all.
-    pub fn tor_proxy(&self) -> Option<String> {
-        if self.kind != Kind::Socks5 {
-            return None;
-        }
-        let ip: IpAddr = self.host.parse().ok()?;
-        if self.user.is_some() && !ip.is_loopback() {
-            return None;
-        }
-        Some(format!(
-            "socks5://{}{}",
-            self.credentials(),
-            SocketAddr::new(ip, self.port)
-        ))
     }
 
     /// The credentials as a proxy's address carries them, percent-encoded and ending in @; empty
@@ -1058,7 +1023,7 @@ mod tests {
 
     #[test]
     fn a_proxy_named_after_the_first_look_is_still_used() {
-        // --tor-reverse names its carrier once tor is up, after tor looked for a proxy to fetch bridges through.
+        // A carrier names its proxy once it is up, after it looked for a proxy to fetch through.
         let mut seen = None;
         assert!(remembered(&mut seen, String::new()).is_none());
         let carrier =
@@ -1069,57 +1034,6 @@ mod tests {
             Some(carrier)
         );
         assert!(remembered(&mut seen, "  ".to_string()).is_none());
-    }
-
-    #[test]
-    fn psiphon_reads_the_proxy_with_its_credentials_in_the_address() {
-        let plain = Upstream::parse("socks5://127.0.0.1:10821").unwrap();
-        assert_eq!(plain.psiphon_url(), "socks5://127.0.0.1:10821");
-        let named = Upstream::parse("http://al%40ice:p%3Ass@proxy.example:8080").unwrap();
-        assert_eq!(
-            named.psiphon_url(),
-            "http://al%40ice:p%3Ass@proxy.example:8080"
-        );
-        let six = Upstream::parse("socks5://[::1]:1080").unwrap();
-        assert_eq!(six.psiphon_url(), "socks5://[::1]:1080");
-    }
-
-    #[test]
-    fn tor_takes_a_socks5_proxy_at_an_address_with_a_password_on_this_machine_only() {
-        let at = |raw: &str| Upstream::parse(raw).unwrap().tor_proxy();
-        assert_eq!(
-            at("socks5://127.0.0.1:10821").as_deref(),
-            Some("socks5://127.0.0.1:10821")
-        );
-        assert_eq!(
-            at("socks5://203.0.113.7:1080").as_deref(),
-            Some("socks5://203.0.113.7:1080")
-        );
-        assert_eq!(
-            at("socks5://al%40ice:p%3Ass@127.0.0.1:1080").as_deref(),
-            Some("socks5://al%40ice:p%3Ass@127.0.0.1:1080")
-        );
-        assert_eq!(
-            at("socks5://alice:secret@[::1]:1080").as_deref(),
-            Some("socks5://alice:secret@[::1]:1080")
-        );
-        assert!(at("http://127.0.0.1:8080").is_none());
-        assert!(at("socks5://proxy.example:1080").is_none());
-        assert!(at("socks5://alice:secret@203.0.113.7:1080").is_none());
-    }
-
-    #[cfg(feature = "tor")]
-    #[test]
-    fn tor_reads_the_password_the_proxy_carries() {
-        let proxy: tor_chanmgr::ProxyProtocol =
-            Upstream::parse("socks5://al%40ice:p%3Ass@127.0.0.1:1080")
-                .unwrap()
-                .tor_proxy()
-                .unwrap()
-                .parse()
-                .unwrap();
-        // Written back from what tor read: the credentials were decoded once, not twice or never.
-        assert_eq!(proxy.to_string(), "socks5://al%40ice:p%3Ass@127.0.0.1:1080");
     }
 
     #[test]

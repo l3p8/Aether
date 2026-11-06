@@ -17,19 +17,10 @@ jobs:
   # Windows uses windows-latest for x86_64. The arm64 MSVC target is not
   # built: it has never been verified on a real arm64 Windows machine.
   #
-  # Every leg builds the pluggable transports first and ships them in a
-  # pt/ folder beside the binary, so tor works out of the box with
-  # nothing for anyone to install by hand.
-  #
   # Every leg also ships a LICENSES/ folder beside the binary: aether's
-  # license, the license files of lyrebird and psiphon-tunnel-core from
-  # the sources the scripts build, lyrebird-THIRD-PARTY-NOTICES.txt and
-  # psiphon-tunnel-core-THIRD-PARTY-NOTICES.txt, which the scripts write
-  # from `go list -deps` for the Go standard library and modules linked
-  # into each, and THIRD-PARTY-NOTICES.txt, which third-party-notices.py
+  # license and THIRD-PARTY-NOTICES.txt, which third-party-notices.py
   # writes from `cargo metadata` and `cargo tree` for the Rust standard
-  # library and the Rust crates linked into aether with the target and
-  # features of the build.
+  # library and the Rust crates linked into aether.
   # ------------------------------------------------------------------
   desktop:
     name: Build ${{ matrix.archive }}
@@ -79,16 +70,8 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/setup-nasm@v1
 
-      - name: Build pluggable transports
-        shell: bash
-        run: bash ../pt-build.sh ${{ matrix.goos }} ${{ matrix.goarch }} "$PWD/pt" "" "$PWD/LICENSES"
-
-      - name: Build psiphon
-        shell: bash
-        run: bash ../psiphon-build.sh ${{ matrix.goos }} ${{ matrix.goarch }} "$PWD/pt" "" "$PWD/LICENSES"
-
       - name: Build release binary
-        run: cargo build --release --features tor --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Collect licenses
         shell: bash
@@ -96,23 +79,21 @@ jobs:
           py=python3
           if [ "$RUNNER_OS" = "Windows" ]; then py=python; fi
           cp ../LICENSE LICENSES/aether-LICENSE.txt
-          "$py" ../third-party-notices.py --target ${{ matrix.target }} --features tor --output LICENSES/THIRD-PARTY-NOTICES.txt
+          "$py" ../third-party-notices.py --target ${{ matrix.target }} --output LICENSES/THIRD-PARTY-NOTICES.txt
 
       - name: Package archive (Unix)
         if: runner.os != 'Windows'
         run: |
-          cp -R pt target/${{ matrix.target }}/release/pt
           cp -R LICENSES target/${{ matrix.target }}/release/LICENSES
           cd target/${{ matrix.target }}/release
-          tar -czf ../../../${{ matrix.archive }}  aether pt LICENSES
+          tar -czf ../../../${{ matrix.archive }}  aether LICENSES
 
       - name: Package archive (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Copy-Item -Recurse -Force pt target/${{ matrix.target }}/release/pt
           Copy-Item -Recurse -Force LICENSES target/${{ matrix.target }}/release/LICENSES
-          Compress-Archive -Path target/${{ matrix.target }}/release/aether.exe,target/${{ matrix.target }}/release/pt,target/${{ matrix.target }}/release/LICENSES,run-aether.bat -DestinationPath ${{ matrix.archive }}
+          Compress-Archive -Path target/${{ matrix.target }}/release/aether.exe,target/${{ matrix.target }}/release/LICENSES,run-aether.bat -DestinationPath ${{ matrix.archive }}
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -173,26 +154,19 @@ jobs:
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
 
-      - name: Build pluggable transports
-        run: bash ../pt-build.sh ${{ matrix.goos }} ${{ matrix.goarch }} "$PWD/pt" "" "$PWD/LICENSES"
-
-      - name: Build psiphon
-        run: bash ../psiphon-build.sh ${{ matrix.goos }} ${{ matrix.goarch }} "$PWD/pt" "" "$PWD/LICENSES"
-
       - name: Build release binary
-        run: cargo build --release --features tor --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Collect licenses
         run: |
           cp ../LICENSE LICENSES/aether-LICENSE.txt
-          python3 ../third-party-notices.py --target ${{ matrix.target }} --features tor --output LICENSES/THIRD-PARTY-NOTICES.txt
+          python3 ../third-party-notices.py --target ${{ matrix.target }} --output LICENSES/THIRD-PARTY-NOTICES.txt
 
       - name: Package archive
         run: |
-          cp -R pt target/${{ matrix.target }}/release/pt
           cp -R LICENSES target/${{ matrix.target }}/release/LICENSES
           cd target/${{ matrix.target }}/release
-          tar -czf ../../../${{ matrix.archive }}  aether pt LICENSES
+          tar -czf ../../../${{ matrix.archive }}  aether LICENSES
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -242,26 +216,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
 
-      - name: Build pluggable transports
-        run: bash ../pt-build.sh linux arm "$PWD/pt" 7 "$PWD/LICENSES"
-
-      - name: Build psiphon
-        run: bash ../psiphon-build.sh linux arm "$PWD/pt" 7 "$PWD/LICENSES"
-
       - name: Build release binary
-        run: cargo build --release --features tor --target armv7-unknown-linux-gnueabihf
+        run: cargo build --release --target armv7-unknown-linux-gnueabihf
 
       - name: Collect licenses
         run: |
           cp ../LICENSE LICENSES/aether-LICENSE.txt
-          python3 ../third-party-notices.py --target armv7-unknown-linux-gnueabihf --features tor --output LICENSES/THIRD-PARTY-NOTICES.txt
+          python3 ../third-party-notices.py --target armv7-unknown-linux-gnueabihf --output LICENSES/THIRD-PARTY-NOTICES.txt
 
       - name: Package archive
         run: |
-          cp -R pt target/armv7-unknown-linux-gnueabihf/release/pt
           cp -R LICENSES target/armv7-unknown-linux-gnueabihf/release/LICENSES
           cd target/armv7-unknown-linux-gnueabihf/release
-          tar -czf ../../../aether-linux-armv7.tar.gz aether pt LICENSES
+          tar -czf ../../../aether-linux-armv7.tar.gz aether LICENSES
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -355,26 +322,19 @@ jobs:
           done
           echo "=== uapi check ==="; for inc in /opt/musl-cross/*/include; do echo "$inc:"; ls "$inc/linux/random.h" "$inc/asm/types.h" 2>&1 | sed 's/^/    /'; done
 
-      - name: Build pluggable transports
-        run: bash ../pt-build.sh linux arm "$PWD/pt" 7 "$PWD/LICENSES"
-
-      - name: Build psiphon
-        run: bash ../psiphon-build.sh linux arm "$PWD/pt" 7 "$PWD/LICENSES"
-
       - name: Build release binary
-        run: cargo build --release --features tor --target armv7-unknown-linux-musleabihf
+        run: cargo build --release --target armv7-unknown-linux-musleabihf
 
       - name: Collect licenses
         run: |
           cp ../LICENSE LICENSES/aether-LICENSE.txt
-          python3 ../third-party-notices.py --target armv7-unknown-linux-musleabihf --features tor --output LICENSES/THIRD-PARTY-NOTICES.txt
+          python3 ../third-party-notices.py --target armv7-unknown-linux-musleabihf --output LICENSES/THIRD-PARTY-NOTICES.txt
 
       - name: Package archive
         run: |
-          cp -R pt target/armv7-unknown-linux-musleabihf/release/pt
           cp -R LICENSES target/armv7-unknown-linux-musleabihf/release/LICENSES
           cd target/armv7-unknown-linux-musleabihf/release
-          tar -czf ../../../aether-linux-armv7-musl.tar.gz aether pt LICENSES
+          tar -czf ../../../aether-linux-armv7-musl.tar.gz aether LICENSES
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -467,26 +427,19 @@ jobs:
           echo "AR_${triple}=${prefix}-ar" >> "$GITHUB_ENV"
           echo "BINDGEN_EXTRA_CLANG_ARGS_${triple}=--target=${{ matrix.target }} --sysroot=/opt/musl-cross/${{ matrix.cross_prefix }}" >> "$GITHUB_ENV"
 
-      - name: Build pluggable transports
-        run: bash ../pt-build.sh ${{ matrix.goos }} ${{ matrix.goarch }} "$PWD/pt" "" "$PWD/LICENSES"
-
-      - name: Build psiphon
-        run: bash ../psiphon-build.sh ${{ matrix.goos }} ${{ matrix.goarch }} "$PWD/pt" "" "$PWD/LICENSES"
-
       - name: Build release binary
-        run: cargo build --release --features tor --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Collect licenses
         run: |
           cp ../LICENSE LICENSES/aether-LICENSE.txt
-          python3 ../third-party-notices.py --target ${{ matrix.target }} --features tor --output LICENSES/THIRD-PARTY-NOTICES.txt
+          python3 ../third-party-notices.py --target ${{ matrix.target }} --output LICENSES/THIRD-PARTY-NOTICES.txt
 
       - name: Package archive
         run: |
-          cp -R pt target/${{ matrix.target }}/release/pt
           cp -R LICENSES target/${{ matrix.target }}/release/LICENSES
           cd target/${{ matrix.target }}/release
-          tar -czf ../../../${{ matrix.archive }} aether pt LICENSES
+          tar -czf ../../../${{ matrix.archive }} aether LICENSES
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -559,12 +512,6 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
-      - name: Build pluggable transports
-        run: bash ../pt-build.sh linux ${{ matrix.goarch }} "$PWD/pt" "${{ matrix.goarm }}" "$PWD/LICENSES"
-
-      - name: Build psiphon
-        run: bash ../psiphon-build.sh linux ${{ matrix.goarch }} "$PWD/pt" "${{ matrix.goarm }}" "$PWD/LICENSES"
-
       - name: Build release binary
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
@@ -572,7 +519,7 @@ jobs:
         run: |
           under=$(echo "${{ matrix.target }}" | tr '-' '_')
           export "BORING_BSSL_RUST_CPPLIB_${under}=static:-bundle=c++"
-          cargo ndk -t ${{ matrix.abi }} --platform 29 build --release --features tor
+          cargo ndk -t ${{ matrix.abi }} --platform 29 build --release 
           bin="target/${{ matrix.target }}/release/aether"
           needed=$(readelf -d "$bin" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
           echo "[android ${{ matrix.abi }}] aether NEEDED: $needed"
@@ -583,14 +530,13 @@ jobs:
       - name: Collect licenses
         run: |
           cp ../LICENSE LICENSES/aether-LICENSE.txt
-          python3 ../third-party-notices.py --target ${{ matrix.target }} --features tor --output LICENSES/THIRD-PARTY-NOTICES.txt
+          python3 ../third-party-notices.py --target ${{ matrix.target }} --output LICENSES/THIRD-PARTY-NOTICES.txt
 
       - name: Package archive
         run: |
-          cp -R pt target/${{ matrix.target }}/release/pt
           cp -R LICENSES target/${{ matrix.target }}/release/LICENSES
           cd target/${{ matrix.target }}/release
-          tar -czf ../../../${{ matrix.archive }}  aether pt LICENSES
+          tar -czf ../../../${{ matrix.archive }}  aether LICENSES
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

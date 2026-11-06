@@ -54,16 +54,9 @@ tokio-boring = "5.3"
 flate2 = "1.1"
 brotli-decompressor = "5.0.0"
 zstd = { version = "0.14", default-features = false }
-arti-client = { version = "0.46", default-features = false, features = ["tokio", "rustls", "compression", "static-sqlite", "bridge-client", "pt-client"], optional = true }
-tor-chanmgr = { version = "0.46", optional = true }
-tor-rtcompat = { version = "0.46", default-features = false, features = ["tokio", "rustls"], optional = true }
-tokio-util = { version = "0.7", features = ["compat"], optional = true }
-liblzma = { version = "0.4", features = ["static"], optional = true }
-tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"], optional = true }
 
 [features]
 default = []
-tor = ["dep:arti-client", "dep:tor-chanmgr", "dep:tor-rtcompat", "dep:tokio-util", "dep:liblzma", "dep:tracing-subscriber"]
 
 [profile.release]
 opt-level = 3
