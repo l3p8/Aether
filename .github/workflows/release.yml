@@ -11,104 +11,14 @@ permissions:
 
 jobs:
   # ------------------------------------------------------------------
-  # macOS + Windows desktop targets, always on the latest runners.
-  # macOS uses macos-latest (Apple Silicon); the Intel/x86_64 binary
-  # is cross-compiled from that same runner.
-  # Windows uses windows-latest for x86_64. The arm64 MSVC target is not
-  # built: it has never been verified on a real arm64 Windows machine.
+  # Linux targets run natively on their runners (x86_64, arm64, armv7,
+  # armv7-musl, x86_64-musl, aarch64-musl); Android is cross-compiled
+  # with the NDK.
   #
-  # Every leg also ships a LICENSES/ folder beside the binary: aether's
+  # Every leg ships a LICENSES/ folder beside the binary: aether's
   # license and THIRD-PARTY-NOTICES.txt, which third-party-notices.py
   # writes from `cargo metadata` and `cargo tree` for the Rust standard
   # library and the Rust crates linked into aether.
-  # ------------------------------------------------------------------
-  desktop:
-    name: Build ${{ matrix.archive }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            goos: darwin
-            goarch: arm64
-            archive: aether-macos-arm64.tar.gz
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            goos: darwin
-            goarch: amd64
-            archive: aether-macos-x86_64.tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            goos: windows
-            goarch: amd64
-            archive: aether-windows-x86_64.zip
-    defaults:
-      run:
-        working-directory: aether
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.22"
-
-      - name: Install CMake and Ninja
-        uses: lukka/get-cmake@latest
-
-      - name: Install NASM
-        if: runner.os == 'Windows'
-        uses: ilammy/setup-nasm@v1
-
-      - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Collect licenses
-        shell: bash
-        run: |
-          py=python3
-          if [ "$RUNNER_OS" = "Windows" ]; then py=python; fi
-          cp ../LICENSE LICENSES/aether-LICENSE.txt
-          "$py" ../third-party-notices.py --target ${{ matrix.target }} --output LICENSES/THIRD-PARTY-NOTICES.txt
-
-      - name: Package archive (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          cp -R LICENSES target/${{ matrix.target }}/release/LICENSES
-          cd target/${{ matrix.target }}/release
-          tar -czf ../../../${{ matrix.archive }}  aether LICENSES
-
-      - name: Package archive (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Copy-Item -Recurse -Force LICENSES target/${{ matrix.target }}/release/LICENSES
-          Compress-Archive -Path target/${{ matrix.target }}/release/aether.exe,target/${{ matrix.target }}/release/LICENSES,run-aether.bat -DestinationPath ${{ matrix.archive }}
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.archive }}
-          path: aether/${{ matrix.archive }}
-          if-no-files-found: error
-
-  # ------------------------------------------------------------------
-  # Linux targets, built inside the latest Fedora container.
-  # x86_64 builds on an x86_64 runner and arm64 on a native arm64
-  # runner, both using fedora:latest so binaries link against a fresh
-  # Fedora toolchain. Rust is installed via rustup to guarantee the
-  # latest stable, as every other job builds with.
-  # ------------------------------------------------------------------
   linux:
     name: Build ${{ matrix.archive }}
     runs-on: ${{ matrix.os }}
@@ -552,7 +462,7 @@ jobs:
   # ------------------------------------------------------------------
   release:
     name: Publish release
-    needs: [desktop, linux, linux-armv7, linux-armv7-musl, linux-musl, android]
+    needs: [linux, linux-armv7, linux-armv7-musl, linux-musl, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
