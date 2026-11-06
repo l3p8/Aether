@@ -3113,16 +3113,7 @@ async fn select_protocol(base: &str) -> Protocol {
     }
 
     loop {
-        let mut extra = String::new();
-        let mut next = 5u8;
-        let take = |line: &str, extra: &mut String, next: &mut u8| -> String {
-            let key = next.to_string();
-            extra.push_str(&format!("  [{key}] {line}\n"));
-            *next += 1;
-            key
-        };
-
-        let last = next;
+        let last = 5u8;
         let zero_trust_key = last.to_string();
         let zero_trust = match team_scope() {
             Some(team) => {
@@ -3137,7 +3128,7 @@ async fn select_protocol(base: &str) -> Protocol {
             "\nProtocol:\n  [1] MASQUE (modern, QUIC/H3, default)\n  \
              [2] WireGuard (classic, faster)\n  [3] WARP-in-WARP / gool\n  \
              [4] MASQUE-in-MASQUE (two masque hops, for a different exit address)\n\
-             {extra}{zero_trust}Choose [1-{last}] (default 1): "
+             {zero_trust}Choose [1-{last}] (default 1): "
         ))
         .await;
 
