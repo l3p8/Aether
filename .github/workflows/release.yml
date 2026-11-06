@@ -69,6 +69,7 @@ jobs:
 
       - name: Collect licenses
         run: |
+          mkdir -p LICENSES
           cp ../LICENSE LICENSES/aether-LICENSE.txt
           python3 ../third-party-notices.py --target ${{ matrix.target }} --output LICENSES/THIRD-PARTY-NOTICES.txt
 
@@ -131,6 +132,7 @@ jobs:
 
       - name: Collect licenses
         run: |
+          mkdir -p LICENSES
           cp ../LICENSE LICENSES/aether-LICENSE.txt
           python3 ../third-party-notices.py --target armv7-unknown-linux-gnueabihf --output LICENSES/THIRD-PARTY-NOTICES.txt
 
@@ -237,6 +239,7 @@ jobs:
 
       - name: Collect licenses
         run: |
+          mkdir -p LICENSES
           cp ../LICENSE LICENSES/aether-LICENSE.txt
           python3 ../third-party-notices.py --target armv7-unknown-linux-musleabihf --output LICENSES/THIRD-PARTY-NOTICES.txt
 
@@ -342,6 +345,7 @@ jobs:
 
       - name: Collect licenses
         run: |
+          mkdir -p LICENSES
           cp ../LICENSE LICENSES/aether-LICENSE.txt
           python3 ../third-party-notices.py --target ${{ matrix.target }} --output LICENSES/THIRD-PARTY-NOTICES.txt
 
@@ -439,6 +443,7 @@ jobs:
 
       - name: Collect licenses
         run: |
+          mkdir -p LICENSES
           cp ../LICENSE LICENSES/aether-LICENSE.txt
           python3 ../third-party-notices.py --target ${{ matrix.target }} --output LICENSES/THIRD-PARTY-NOTICES.txt
 
